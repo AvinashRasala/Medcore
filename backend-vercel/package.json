@@ -1,0 +1,22 @@
+{
+  "name": "hospital-management-backend-vercel",
+  "version": "1.0.0",
+  "description": "Hospital Management System - Backend API (Vercel serverless functions)",
+  "private": true,
+  "scripts": {
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "seed": "node prisma/seed.js",
+    "vercel-build": "prisma generate && mkdir -p public && echo \"<h1>MedCore API</h1><p>This is the backend API. See /api/health for status.</p>\" > public/index.html"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.20.0",
+    "bcryptjs": "^2.4.3",
+    "jsonwebtoken": "^9.0.2",
+    "resend": "^4.0.1",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "prisma": "^5.20.0"
+  }
+}

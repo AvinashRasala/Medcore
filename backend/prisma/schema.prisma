@@ -1,0 +1,273 @@
+// ============================================================
+// Hospital Management System — Database Schema
+// ORM: Prisma  |  Production DB: PostgreSQL
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ------------------------------------------------------------
+// ENUMS
+// ------------------------------------------------------------
+
+enum Role {
+  ADMIN
+  DOCTOR
+  RECEPTIONIST
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+}
+
+enum AppointmentStatus {
+  SCHEDULED
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+}
+
+enum PaymentStatus {
+  UNPAID
+  PARTIALLY_PAID
+  PAID
+  REFUNDED
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  UPI
+  INSURANCE
+  BANK_TRANSFER
+}
+
+// ------------------------------------------------------------
+// USERS  (login accounts — staff only; patients are NOT users)
+// ------------------------------------------------------------
+
+model User {
+  id           String   @id @default(uuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         Role
+  phone        String?
+  profilePhoto String?  @db.Text // Base64-encoded image data URL
+  isActive     Boolean  @default(true)
+
+  // Email verification
+  emailVerified           Boolean   @default(false)
+  verificationToken       String?   @unique
+  verificationTokenExpiry DateTime?
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // If this user account is a doctor, link to Doctor profile
+  doctorProfile Doctor?
+
+  appointmentsCreated Appointment[]     @relation("AppointmentCreatedBy")
+  medicalRecords       MedicalRecord[]  @relation("RecordAuthor")
+  bills                Bill[]           @relation("BillCreatedBy")
+  auditLogs            AuditLog[]
+
+  @@index([role])
+  @@map("users")
+}
+
+// ------------------------------------------------------------
+// DOCTORS
+// ------------------------------------------------------------
+
+model Doctor {
+  id              String   @id @default(uuid())
+  userId          String   @unique
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  specialization  String
+  qualification   String?
+  licenseNumber   String   @unique
+  consultationFee Decimal  @db.Decimal(10, 2)
+  bio             String?
+  createdAt       DateTime @default(now())
+
+  schedules    DoctorSchedule[]
+  appointments Appointment[]
+  records      MedicalRecord[]
+
+  @@map("doctors")
+}
+
+// Weekly recurring availability, e.g. Mon 09:00-17:00
+model DoctorSchedule {
+  id        String   @id @default(uuid())
+  doctorId  String
+  doctor    Doctor   @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  dayOfWeek Int // 0 = Sunday ... 6 = Saturday
+  startTime String // "09:00"
+  endTime   String // "17:00"
+  slotMinutes Int    @default(30)
+
+  @@index([doctorId, dayOfWeek])
+  @@map("doctor_schedules")
+}
+
+// ------------------------------------------------------------
+// PATIENTS
+// ------------------------------------------------------------
+
+model Patient {
+  id              String   @id @default(uuid())
+  patientCode     String   @unique // human-friendly e.g. PAT-00001
+  firstName       String
+  lastName        String
+  dateOfBirth     DateTime
+  gender          Gender
+  phone           String
+  email           String?
+  address         String?
+  bloodGroup      String?
+  emergencyContactName  String?
+  emergencyContactPhone String?
+  allergies       String? // free text, quick reference
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  appointments    Appointment[]
+  medicalRecords  MedicalRecord[]
+  bills           Bill[]
+
+  @@index([phone])
+  @@index([lastName, firstName])
+  @@map("patients")
+}
+
+// ------------------------------------------------------------
+// APPOINTMENTS
+// ------------------------------------------------------------
+
+model Appointment {
+  id            String            @id @default(uuid())
+  patientId     String
+  patient       Patient           @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  doctorId      String
+  doctor        Doctor            @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  scheduledAt   DateTime
+  durationMins  Int               @default(30)
+  status        AppointmentStatus @default(SCHEDULED)
+  reason        String?
+  notes         String?
+  createdById   String
+  createdBy     User              @relation("AppointmentCreatedBy", fields: [createdById], references: [id])
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  medicalRecord MedicalRecord?
+  bill          Bill?
+
+  @@index([doctorId, scheduledAt])
+  @@index([patientId])
+  @@index([status])
+  @@map("appointments")
+}
+
+// ------------------------------------------------------------
+// MEDICAL RECORDS
+// ------------------------------------------------------------
+
+model MedicalRecord {
+  id             String       @id @default(uuid())
+  patientId      String
+  patient        Patient      @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  doctorId       String
+  doctor         Doctor       @relation(fields: [doctorId], references: [id])
+  appointmentId  String?      @unique
+  appointment    Appointment? @relation(fields: [appointmentId], references: [id])
+  authorId       String
+  author         User         @relation("RecordAuthor", fields: [authorId], references: [id])
+
+  visitDate      DateTime     @default(now())
+  diagnosis      String
+  symptoms       String?
+  prescription   String?      // free text; could be normalized further later
+  labTests       String?
+  followUpDate   DateTime?
+  notes          String?
+
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([patientId])
+  @@index([doctorId])
+  @@map("medical_records")
+}
+
+// ------------------------------------------------------------
+// BILLING
+// ------------------------------------------------------------
+
+model Bill {
+  id            String        @id @default(uuid())
+  invoiceNumber String        @unique // e.g. INV-2026-00001
+  patientId     String
+  patient       Patient       @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  appointmentId String?       @unique
+  appointment   Appointment?  @relation(fields: [appointmentId], references: [id])
+  createdById   String
+  createdBy     User          @relation("BillCreatedBy", fields: [createdById], references: [id])
+
+  items         BillItem[]
+  subtotal      Decimal       @db.Decimal(10, 2)
+  discount      Decimal       @default(0) @db.Decimal(10, 2)
+  tax           Decimal       @default(0) @db.Decimal(10, 2)
+  totalAmount   Decimal       @db.Decimal(10, 2)
+  amountPaid    Decimal       @default(0) @db.Decimal(10, 2)
+  paymentStatus PaymentStatus @default(UNPAID)
+  paymentMethod PaymentMethod?
+  paidAt        DateTime?
+
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  @@index([patientId])
+  @@index([paymentStatus])
+  @@map("bills")
+}
+
+model BillItem {
+  id          String  @id @default(uuid())
+  billId      String
+  bill        Bill    @relation(fields: [billId], references: [id], onDelete: Cascade)
+  description String  // e.g. "Consultation Fee", "Blood Test - CBC"
+  quantity    Int     @default(1)
+  unitPrice   Decimal @db.Decimal(10, 2)
+  lineTotal   Decimal @db.Decimal(10, 2)
+
+  @@map("bill_items")
+}
+
+// ------------------------------------------------------------
+// AUDIT LOG (nice touch for a "real product" — who did what, when)
+// ------------------------------------------------------------
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id])
+  action    String   // e.g. "CREATE_PATIENT", "UPDATE_BILL"
+  entity    String   // e.g. "Patient", "Bill"
+  entityId  String?
+  metadata  String?  // JSON-stringified extra detail
+  createdAt DateTime @default(now())
+
+  @@index([entity, entityId])
+  @@map("audit_logs")
+}
